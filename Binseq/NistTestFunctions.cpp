@@ -203,6 +203,7 @@ static std::shared_ptr<Carbon::Node> nistTestSerial(std::vector<std::shared_ptr<
 			objResult->Map.insert_or_assign("psim0", std::make_shared<Carbon::NodeFloat>(testResults.serial.psim0));
 			objResult->Map.insert_or_assign("psim1", std::make_shared<Carbon::NodeFloat>(testResults.serial.psim1));
 			objResult->Map.insert_or_assign("psim2", std::make_shared<Carbon::NodeFloat>(testResults.serial.psim2));
+			objResult->Map.insert_or_assign("block_length", std::make_shared<Carbon::NodeInteger>(testParameters.serialBlockLength));
 			return objResult;
 		}
 		else throw Carbon::ExecutorRuntimeException("nist test function only works on binary sequence");
@@ -211,9 +212,93 @@ static std::shared_ptr<Carbon::Node> nistTestSerial(std::vector<std::shared_ptr<
 }
 
 
-//TODO non overlapping
+static std::shared_ptr<Carbon::Node> nistTestNonOverlappingTemplateMatchings(std::vector<std::shared_ptr<Carbon::Node>>& node) {
+	if (node.size() >= 1) {
+		if (node[0]->GetNodeType() == Carbon::NodeType::Bits) {
+			auto& l = reinterpret_cast<Carbon::NodeBits&>(*node[0]);
+			auto& bits = l.Value;
+			auto nistBitSequence = Convert(bits);
+			Nist::Parameters testParameters = GetTestParameters(nistBitSequence);
+			// check for paramter
+			if (node.size() >= 2)
+			{
+				if (node[1]->GetNodeType() == Carbon::NodeType::Integer)
+				{
+					auto& param = reinterpret_cast<Carbon::NodeInteger&>(*node[1]);
+					testParameters.nonOverlappingTemplateBlockLength = param.Value;
+				}
+				else
+				{
+					throw Carbon::ExecutorRuntimeException("second parameter for test function may only be an integer");
+				}
+			}
+			Nist::Results testResults;
+			Nist::Test test(&nistBitSequence, &testParameters, &testResults);
+			test.RunTestNonOverlappingTemplateMatchings();
+			auto objResult = std::make_shared<Carbon::NodeObject>();
 
-//TODO overlapping
+			auto arrayPValue = std::make_shared<Carbon::NodeArray>();
+			for (auto x : testResults.nonoverlapping.p_value) {
+				arrayPValue->Vector.push_back(std::make_shared<Carbon::NodeFloat>(x));
+			}
+			objResult->Map.insert_or_assign("p_value", arrayPValue);
+
+			auto arrayW = std::make_shared<Carbon::NodeArray>();
+			for (auto x : testResults.nonoverlapping.W) {
+				arrayPValue->Vector.push_back(std::make_shared<Carbon::NodeInteger>(x));
+			}
+			objResult->Map.insert_or_assign("W", arrayW);
+
+			objResult->Map.insert_or_assign("templates", std::make_shared<Carbon::NodeInteger>(testResults.nonoverlapping.templates));
+			objResult->Map.insert_or_assign("block_length", std::make_shared<Carbon::NodeInteger>(testParameters.nonOverlappingTemplateBlockLength));
+			return objResult;
+		}
+		else throw Carbon::ExecutorRuntimeException("nist test function only works on binary sequence");
+	}
+	else throw Carbon::ExecutorRuntimeException("nist test function needs 1 parameter");
+}
+
+
+static std::shared_ptr<Carbon::Node> nistTestOverlappingTemplateMatchings(std::vector<std::shared_ptr<Carbon::Node>>& node) {
+	if (node.size() >= 1) {
+		if (node[0]->GetNodeType() == Carbon::NodeType::Bits) {
+			auto& l = reinterpret_cast<Carbon::NodeBits&>(*node[0]);
+			auto& bits = l.Value;
+			auto nistBitSequence = Convert(bits);
+			Nist::Parameters testParameters = GetTestParameters(nistBitSequence);
+			// check for paramter
+			if (node.size() >= 2)
+			{
+				if (node[1]->GetNodeType() == Carbon::NodeType::Integer)
+				{
+					auto& param = reinterpret_cast<Carbon::NodeInteger&>(*node[1]);
+					testParameters.overlappingTemplateBlockLength = param.Value;
+				}
+				else
+				{
+					throw Carbon::ExecutorRuntimeException("second parameter for test function may only be an integer");
+				}
+			}
+			Nist::Results testResults;
+			Nist::Test test(&nistBitSequence, &testParameters, &testResults);
+			test.RunTestOverlappingTemplateMatchings();
+			auto objResult = std::make_shared<Carbon::NodeObject>();
+
+			auto arrayPValue = std::make_shared<Carbon::NodeArray>();
+			for (auto x : testResults.overlapping.nu) {
+				arrayPValue->Vector.push_back(std::make_shared<Carbon::NodeInteger>(x));
+			}
+			objResult->Map.insert_or_assign("nu", arrayPValue);
+
+			objResult->Map.insert_or_assign("p_value", std::make_shared<Carbon::NodeInteger>(testResults.overlapping.p_value));
+			objResult->Map.insert_or_assign("chi2", std::make_shared<Carbon::NodeInteger>(testResults.overlapping.chi2));
+			objResult->Map.insert_or_assign("block_length", std::make_shared<Carbon::NodeInteger>(testParameters.overlappingTemplateBlockLength));
+			return objResult;
+		}
+		else throw Carbon::ExecutorRuntimeException("nist test function only works on binary sequence");
+	}
+	else throw Carbon::ExecutorRuntimeException("nist test function needs 1 parameter");
+}
 
 
 
@@ -276,7 +361,7 @@ static std::shared_ptr<Carbon::Node> nistTestApproximateEntropy(std::vector<std:
 			objResult->Map.insert_or_assign("ApEn", arrayApEn);
 			objResult->Map.insert_or_assign("pp", std::make_shared<Carbon::NodeInteger>(testResults.approximate_entropy.pp));
 			objResult->Map.insert_or_assign("chi_squared", std::make_shared<Carbon::NodeFloat>(testResults.approximate_entropy.chi_squared));
-			objResult->Map.insert_or_assign("blockLength", std::make_shared<Carbon::NodeInteger>(testParameters.approximateEntropyBlockLength));
+			objResult->Map.insert_or_assign("block_length", std::make_shared<Carbon::NodeInteger>(testParameters.approximateEntropyBlockLength));
 			return objResult;
 		}
 		else throw Carbon::ExecutorRuntimeException("nist test function only works on binary sequence");
@@ -422,6 +507,7 @@ static std::shared_ptr<Carbon::Node> nistTestLinearComplexity(std::vector<std::s
 			auto objResult = std::make_shared<Carbon::NodeObject>();
 			objResult->Map.insert_or_assign("p_value", std::make_shared<Carbon::NodeFloat>(testResults.linear_complexity.p_value));
 			objResult->Map.insert_or_assign("chi2", std::make_shared<Carbon::NodeFloat>(testResults.linear_complexity.chi2));
+			objResult->Map.insert_or_assign("block_length", std::make_shared<Carbon::NodeFloat>(testParameters.linearComplexitySequenceLength));
 			auto objArray = std::make_shared<Carbon::NodeArray>();
 			for (int i = 0; i < testResults.linear_complexity.nu.size(); i++) {
 				objArray->Vector.push_back(std::make_shared<Carbon::NodeInteger>(testResults.linear_complexity.nu[i]));
