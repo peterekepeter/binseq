@@ -1,4 +1,5 @@
 #include "NistTestFunctions.h"
+#include <LibNistSts/common/stat_fncs.h>
 #include <LibNistSts/Test.h>
 
 static Nist::BitSequence Convert(binseq::bit_sequence& bits)
@@ -34,17 +35,101 @@ Nist::Parameters GetTestParameters(Nist::BitSequence& nistBitSequence)
 	return params;
 }
 
+struct BlockLengthAndVersionResult
+{
+	bool foundBlockLength;
+	size_t blockLength;
+	bool foundVersion;
+	std::string version;
+};
+
+BlockLengthAndVersionResult ParseBlockLengthAndVersion(std::vector<std::shared_ptr<Carbon::Node>>& node)
+{
+	BlockLengthAndVersionResult result;
+	// init
+	result.foundBlockLength = false;
+	result.foundVersion = false;
+	result.blockLength = 0;
+	result.version = "v1";
+	// serach params, param 0 must be bits, skip that
+	for (int i=1; i<node.size(); i++)
+	{
+		auto& arg = node[i];
+		// based on parameter type
+		switch (arg->GetNodeType())
+		{
+		case Carbon::NodeType::Integer:
+			if (!result.foundBlockLength)
+			{
+				auto value = reinterpret_cast<Carbon::NodeInteger&>(*arg).Value;
+				if (value<0)
+				{
+					throw Carbon::ExecutorRuntimeException("block length should be a positive integer");
+				}
+				result.blockLength = value;
+				result.foundBlockLength = true;
+			} else
+			{
+				throw Carbon::ExecutorRuntimeException("function only accepts one optional integer parameter which is the block length");
+			}
+			break;
+		case Carbon::NodeType::String:
+			if (!result.foundVersion)
+			{
+				auto value = reinterpret_cast<Carbon::NodeString&>(*arg).Value;
+
+				if (value.length()>3 || value.length()<2 || value[0] != 'v')
+				{
+					throw Carbon::ExecutorRuntimeException("version should be a string like v1, v2, v3 and so on");
+				}
+				result.version = value;
+				result.foundVersion = true;
+			}
+			else
+			{
+				throw Carbon::ExecutorRuntimeException("function only accepts one optional integer parameter which is the block length");
+			}
+			break;
+		default:
+			throw Carbon::ExecutorRuntimeException("wrong parameter format, function expects optional block length and version (an integer and or string like \"v1\", \"v2\" and so on)");
+		}
+	}
+	return result;
+}
+
+static std::shared_ptr<Carbon::Node> nistTestBlockFrequency(std::vector<std::shared_ptr<Carbon::Node>>& node); // forward
 
 static std::shared_ptr<Carbon::Node> nistTestFrequency(std::vector<std::shared_ptr<Carbon::Node>>& node) {
-	if (node.size() == 1) {
+	if (node.size() >= 1) {
 		if (node[0]->GetNodeType() == Carbon::NodeType::Bits) {
+			auto info = ParseBlockLengthAndVersion(node);
+			// in case of this frequency test, in case block length is provided
+			// it's safe to assume that user wants the nistTestBlockFrequency instead
+			if (info.foundBlockLength)
+			{
+				// redirect
+				return nistTestBlockFrequency(node);
+			}
 			auto& l = reinterpret_cast<Carbon::NodeBits&>(*node[0]);
 			auto& bits = l.Value;
 			auto nistBitSequence = Convert(bits);
 			Nist::Parameters testParameters = GetTestParameters(nistBitSequence);
 			Nist::Results testResults;
 			Nist::Test test(&nistBitSequence, &testParameters, &testResults);
-			test.RunTestFrequency();			
+			if (info.foundVersion)
+			{
+				// auto
+				if (info.version == "v1")		Frequency(test);
+				else if (info.version == "v2")	Frequency2(test);
+				else if (info.version == "v3")	Frequency3(test);
+				else if (info.version == "v4")	Frequency4(test);
+				else throw Carbon::ExecutorRuntimeException("Frequency test version not found, possible values are v1, v2, v3, v4");
+			}
+			else
+			{
+				// based on speed setting 
+				test.RunTestFrequency();
+			}			
 			auto objResult = std::make_shared<Carbon::NodeObject>();
 			objResult->Map.insert_or_assign("p_value", std::make_shared<Carbon::NodeFloat>(testResults.frequency.p_value));
 			objResult->Map.insert_or_assign("sum", std::make_shared<Carbon::NodeFloat>(testResults.frequency.sum));
@@ -53,7 +138,7 @@ static std::shared_ptr<Carbon::Node> nistTestFrequency(std::vector<std::shared_p
 		}
 		else throw Carbon::ExecutorRuntimeException("nist test function only works on binary sequence");
 	}
-	else throw Carbon::ExecutorRuntimeException("nist test function needs 1 parameter");
+	else throw Carbon::ExecutorRuntimeException("nist test function needs at least 1 parameter");
 }
 
 
@@ -61,26 +146,33 @@ static std::shared_ptr<Carbon::Node> nistTestFrequency(std::vector<std::shared_p
 static std::shared_ptr<Carbon::Node> nistTestBlockFrequency(std::vector<std::shared_ptr<Carbon::Node>>& node) {
 	if (node.size() >= 1) {
 		if (node[0]->GetNodeType() == Carbon::NodeType::Bits) {
+			auto info = ParseBlockLengthAndVersion(node);
 			auto& l = reinterpret_cast<Carbon::NodeBits&>(*node[0]);
 			auto& bits = l.Value;
 			auto nistBitSequence = Convert(bits);
 			Nist::Parameters testParameters = GetTestParameters(nistBitSequence);
-			// check for paramter
-			if (node.size()>=2)
+			if (info.foundBlockLength)
 			{
-				if (node[1]->GetNodeType() == Carbon::NodeType::Integer)
-				{
-					auto& param = reinterpret_cast<Carbon::NodeInteger&>(*node[1]);
-					testParameters.blockFrequencyBlockLength = param.Value;
-				}
-				else
-				{
-					throw Carbon::ExecutorRuntimeException("second parameter for test function may only be an integer");
-				}
+				testParameters.blockFrequencyBlockLength = info.blockLength;
 			}
+			// check for paramter
 			Nist::Results testResults;
-			Nist::Test test(&nistBitSequence, &testParameters, &testResults);
-			test.RunTestBlockFrequency();
+			Nist::Test test(&nistBitSequence, &testParameters, &testResults); 
+			// if provided version
+			if (info.foundVersion)
+			{
+				// auto
+				if (info.version == "v1")		BlockFrequency(test);
+				else if (info.version == "v2")	BlockFrequency2(test);
+				else if (info.version == "v3")	BlockFrequency3(test);
+				else if (info.version == "v4")	BlockFrequency4(test);
+				else throw Carbon::ExecutorRuntimeException("Block frequency test version not found, possible values are v1, v2, v3, v4");
+			}
+			else
+			{
+				// based on speed setting 
+				test.RunTestBlockFrequency();
+			}
 			auto objResult = std::make_shared<Carbon::NodeObject>();
 			objResult->Map.insert_or_assign("p_value", std::make_shared<Carbon::NodeFloat>(testResults.blockfrequency.p_value));
 			objResult->Map.insert_or_assign("chi_squared", std::make_shared<Carbon::NodeFloat>(testResults.blockfrequency.chi_squared));
@@ -89,20 +181,39 @@ static std::shared_ptr<Carbon::Node> nistTestBlockFrequency(std::vector<std::sha
 		}
 		else throw Carbon::ExecutorRuntimeException("nist test function only works on binary sequence");
 	}
-	else throw Carbon::ExecutorRuntimeException("nist test function needs 1 parameter");
+	else throw Carbon::ExecutorRuntimeException("nist test function needs at least 1 parameter");
 }
 
 
 static std::shared_ptr<Carbon::Node> nistTestRuns(std::vector<std::shared_ptr<Carbon::Node>>& node) {
-	if (node.size() == 1) {
+	if (node.size() >= 1) {
 		if (node[0]->GetNodeType() == Carbon::NodeType::Bits) {
+			auto info = ParseBlockLengthAndVersion(node);
+			if (info.foundBlockLength)
+			{
+				throw Carbon::ExecutorRuntimeException("Runs test does not need block length");
+			}
 			auto& l = reinterpret_cast<Carbon::NodeBits&>(*node[0]);
 			auto& bits = l.Value;
 			auto nistBitSequence = Convert(bits);
 			Nist::Parameters testParameters = GetTestParameters(nistBitSequence);
 			Nist::Results testResults;
 			Nist::Test test(&nistBitSequence, &testParameters, &testResults);
-			test.RunTestRuns();
+			// if provided version
+			if (info.foundVersion)
+			{
+				// auto
+				if (info.version == "v1")		Runs(test);
+				else if (info.version == "v2")	Runs2(test);
+				else if (info.version == "v3")	Runs3(test);
+				else if (info.version == "v4")	Runs4(test);
+				else throw Carbon::ExecutorRuntimeException("Runs test version not found, possible values are v1, v2, v3, v4");
+			}
+			else
+			{
+				// based on speed setting 
+				test.RunTestRuns();
+			}
 			auto objResult = std::make_shared<Carbon::NodeObject>();
 			objResult->Map.insert_or_assign("p_value", std::make_shared<Carbon::NodeFloat>(testResults.runs.p_value));
 			objResult->Map.insert_or_assign("V", std::make_shared<Carbon::NodeFloat>(testResults.runs.V));
@@ -112,19 +223,37 @@ static std::shared_ptr<Carbon::Node> nistTestRuns(std::vector<std::shared_ptr<Ca
 		}
 		else throw Carbon::ExecutorRuntimeException("nist test function only works on binary sequence");
 	}
-	else throw Carbon::ExecutorRuntimeException("nist test function needs 1 parameter");
+	else throw Carbon::ExecutorRuntimeException("nist test function needs at least 1 parameter");
 }
 
 static std::shared_ptr<Carbon::Node> nistTestLongestRunOfOnes(std::vector<std::shared_ptr<Carbon::Node>>& node) {
-	if (node.size() == 1) {
+	if (node.size() >= 1) {
 		if (node[0]->GetNodeType() == Carbon::NodeType::Bits) {
+			auto info = ParseBlockLengthAndVersion(node);
+			if (info.foundBlockLength)
+			{
+				throw Carbon::ExecutorRuntimeException("LongestRunOfOnes test does not need block length");
+			}
 			auto& l = reinterpret_cast<Carbon::NodeBits&>(*node[0]);
 			auto& bits = l.Value;
 			auto nistBitSequence = Convert(bits);
 			Nist::Parameters testParameters = GetTestParameters(nistBitSequence);
 			Nist::Results testResults;
 			Nist::Test test(&nistBitSequence, &testParameters, &testResults);
-			test.RunTestLongestRunOfOnes();
+			// if provided version
+			if (info.foundVersion)
+			{
+				// auto
+				if (info.version == "v1")		LongestRunOfOnes(test);
+				else if (info.version == "v2")	LongestRunOfOnes2(test);
+				else if (info.version == "v3")	LongestRunOfOnes3(test);
+				else throw Carbon::ExecutorRuntimeException("LongestRunOfOnes test version not found, possible values are v1, v2, v3");
+			}
+			else
+			{
+				// based on speed setting 
+				test.RunTestLongestRunOfOnes();
+			}
 			auto objResult = std::make_shared<Carbon::NodeObject>();
 			objResult->Map.insert_or_assign("p_value", std::make_shared<Carbon::NodeFloat>(testResults.longestrunofones.p_value));
 			objResult->Map.insert_or_assign("M", std::make_shared<Carbon::NodeFloat>(testResults.longestrunofones.M));
@@ -140,19 +269,36 @@ static std::shared_ptr<Carbon::Node> nistTestLongestRunOfOnes(std::vector<std::s
 		}
 		else throw Carbon::ExecutorRuntimeException("nist test function only works on binary sequence");
 	}
-	else throw Carbon::ExecutorRuntimeException("nist test function needs 1 parameter");
+	else throw Carbon::ExecutorRuntimeException("nist test function needs at least 1 parameter");
 }
 
 static std::shared_ptr<Carbon::Node> nistTestRank(std::vector<std::shared_ptr<Carbon::Node>>& node) {
-	if (node.size() == 1) {
+	if (node.size() >= 1) {
 		if (node[0]->GetNodeType() == Carbon::NodeType::Bits) {
+			auto info = ParseBlockLengthAndVersion(node);
+			if (info.foundBlockLength)
+			{
+				throw Carbon::ExecutorRuntimeException("Rank test does not need block length");
+			}
 			auto& l = reinterpret_cast<Carbon::NodeBits&>(*node[0]);
 			auto& bits = l.Value;
 			auto nistBitSequence = Convert(bits);
 			Nist::Parameters testParameters = GetTestParameters(nistBitSequence);
 			Nist::Results testResults;
 			Nist::Test test(&nistBitSequence, &testParameters, &testResults);
-			test.RunTestRank();
+			// if provided version
+			if (info.foundVersion)
+			{
+				// auto
+				if (info.version == "v1")		Rank(test);
+				else if (info.version == "v2")	Rank2(test);
+				else throw Carbon::ExecutorRuntimeException("Rank test version not found, possible values are v1, v2");
+			}
+			else
+			{
+				// based on speed setting 
+				test.RunTestRank();
+			}
 			auto objResult = std::make_shared<Carbon::NodeObject>();
 			objResult->Map.insert_or_assign("p_value", std::make_shared<Carbon::NodeFloat>(testResults.rank.p_value));
 			objResult->Map.insert_or_assign("F_30", std::make_shared<Carbon::NodeFloat>(testResults.rank.F_30));
@@ -167,33 +313,39 @@ static std::shared_ptr<Carbon::Node> nistTestRank(std::vector<std::shared_ptr<Ca
 		}
 		else throw Carbon::ExecutorRuntimeException("nist test function only works on binary sequence");
 	}
-	else throw Carbon::ExecutorRuntimeException("nist test function needs 1 parameter");
+	else throw Carbon::ExecutorRuntimeException("nist test function needs at least 1 parameter");
 }
 
 static std::shared_ptr<Carbon::Node> nistTestSerial(std::vector<std::shared_ptr<Carbon::Node>>& node) {
-	if (node.size() == 1) {
+	if (node.size() >= 1) {
 		if (node[0]->GetNodeType() == Carbon::NodeType::Bits) {
+			auto info = ParseBlockLengthAndVersion(node);
 			auto& l = reinterpret_cast<Carbon::NodeBits&>(*node[0]);
 			auto& bits = l.Value;
 			auto nistBitSequence = Convert(bits);
 			Nist::Parameters testParameters = GetTestParameters(nistBitSequence);
 			// check for paramter
-			if (node.size() >= 2)
+			if (info.foundBlockLength)
 			{
-				if (node[1]->GetNodeType() == Carbon::NodeType::Integer)
-				{
-					auto& param = reinterpret_cast<Carbon::NodeInteger&>(*node[1]);
-					testParameters.serialBlockLength = param.Value;
-				}
-				else
-				{
-					throw Carbon::ExecutorRuntimeException("second parameter for test function may only be an integer");
-				}
+				testParameters.serialBlockLength = info.blockLength;
 			}
 			Nist::Results testResults;
 			Nist::Test test(&nistBitSequence, &testParameters, &testResults);
 			// run
-			test.RunTestSerial();
+			// if provided version
+			if (info.foundVersion)
+			{
+				// auto
+				if (info.version == "v1")		Serial(test);
+				else if (info.version == "v2")	Serial2(test);
+				else if (info.version == "v4")	Serial4(test);
+				else throw Carbon::ExecutorRuntimeException("Serial test version not found, possible values are v1, v2, v4");
+			}
+			else
+			{
+				// based on speed setting 
+				test.RunTestSerial();
+			}
 			// build dynamic object to return results
 			auto objResult = std::make_shared<Carbon::NodeObject>();
 			objResult->Map.insert_or_assign("p_value1", std::make_shared<Carbon::NodeFloat>(testResults.serial.p_value1));
@@ -208,33 +360,39 @@ static std::shared_ptr<Carbon::Node> nistTestSerial(std::vector<std::shared_ptr<
 		}
 		else throw Carbon::ExecutorRuntimeException("nist test function only works on binary sequence");
 	}
-	else throw Carbon::ExecutorRuntimeException("nist test function needs 1 parameter");
+	else throw Carbon::ExecutorRuntimeException("nist test function needs at least 1 parameter");
 }
 
 
 static std::shared_ptr<Carbon::Node> nistTestNonOverlappingTemplateMatchings(std::vector<std::shared_ptr<Carbon::Node>>& node) {
 	if (node.size() >= 1) {
 		if (node[0]->GetNodeType() == Carbon::NodeType::Bits) {
+			auto info = ParseBlockLengthAndVersion(node);
 			auto& l = reinterpret_cast<Carbon::NodeBits&>(*node[0]);
 			auto& bits = l.Value;
 			auto nistBitSequence = Convert(bits);
 			Nist::Parameters testParameters = GetTestParameters(nistBitSequence);
 			// check for paramter
-			if (node.size() >= 2)
+			if (info.foundBlockLength)
 			{
-				if (node[1]->GetNodeType() == Carbon::NodeType::Integer)
-				{
-					auto& param = reinterpret_cast<Carbon::NodeInteger&>(*node[1]);
-					testParameters.nonOverlappingTemplateBlockLength = param.Value;
-				}
-				else
-				{
-					throw Carbon::ExecutorRuntimeException("second parameter for test function may only be an integer");
-				}
+				testParameters.nonOverlappingTemplateBlockLength = info.blockLength;
 			}
 			Nist::Results testResults;
 			Nist::Test test(&nistBitSequence, &testParameters, &testResults);
-			test.RunTestNonOverlappingTemplateMatchings();
+			// if provided version
+			if (info.foundVersion)
+			{
+				// auto
+				if (info.version == "v1")		NonOverlappingTemplateMatchings(test);
+				else if (info.version == "v2")	NonOverlappingTemplateMatchings2(test);
+				else if (info.version == "v4")	NonOverlappingTemplateMatchings4(test);
+				else throw Carbon::ExecutorRuntimeException("NonOverlappingTemplateMatchings test version not found, possible values are v1, v2, v4");
+			}
+			else
+			{
+				// based on speed setting 
+				test.RunTestNonOverlappingTemplateMatchings();
+			}
 			auto objResult = std::make_shared<Carbon::NodeObject>();
 
 			auto arrayPValue = std::make_shared<Carbon::NodeArray>();
@@ -255,33 +413,40 @@ static std::shared_ptr<Carbon::Node> nistTestNonOverlappingTemplateMatchings(std
 		}
 		else throw Carbon::ExecutorRuntimeException("nist test function only works on binary sequence");
 	}
-	else throw Carbon::ExecutorRuntimeException("nist test function needs 1 parameter");
+	else throw Carbon::ExecutorRuntimeException("nist test function needs at least 1 parameter");
 }
 
 
 static std::shared_ptr<Carbon::Node> nistTestOverlappingTemplateMatchings(std::vector<std::shared_ptr<Carbon::Node>>& node) {
 	if (node.size() >= 1) {
 		if (node[0]->GetNodeType() == Carbon::NodeType::Bits) {
+			auto info = ParseBlockLengthAndVersion(node);
 			auto& l = reinterpret_cast<Carbon::NodeBits&>(*node[0]);
 			auto& bits = l.Value;
 			auto nistBitSequence = Convert(bits);
 			Nist::Parameters testParameters = GetTestParameters(nistBitSequence);
 			// check for paramter
-			if (node.size() >= 2)
+			if (info.foundBlockLength)
 			{
-				if (node[1]->GetNodeType() == Carbon::NodeType::Integer)
-				{
-					auto& param = reinterpret_cast<Carbon::NodeInteger&>(*node[1]);
-					testParameters.overlappingTemplateBlockLength = param.Value;
-				}
-				else
-				{
-					throw Carbon::ExecutorRuntimeException("second parameter for test function may only be an integer");
-				}
+				testParameters.overlappingTemplateBlockLength = info.blockLength;
 			}
 			Nist::Results testResults;
 			Nist::Test test(&nistBitSequence, &testParameters, &testResults);
-			test.RunTestOverlappingTemplateMatchings();
+			// if provided version
+			if (info.foundVersion)
+			{
+				// auto
+				if (info.version == "v1")		OverlappingTemplateMatchings(test);
+				else if (info.version == "v2")	OverlappingTemplateMatchings2(test);
+				else if (info.version == "v3")	OverlappingTemplateMatchings3(test);
+				else if (info.version == "v4")	OverlappingTemplateMatchings4(test);
+				else throw Carbon::ExecutorRuntimeException("OverlappingTemplateMatchings test version not found, possible values are v1, v2, v3, v4");
+			}
+			else
+			{
+				// based on speed setting 
+				test.RunTestOverlappingTemplateMatchings();
+			}
 			auto objResult = std::make_shared<Carbon::NodeObject>();
 
 			auto arrayPValue = std::make_shared<Carbon::NodeArray>();
@@ -297,20 +462,38 @@ static std::shared_ptr<Carbon::Node> nistTestOverlappingTemplateMatchings(std::v
 		}
 		else throw Carbon::ExecutorRuntimeException("nist test function only works on binary sequence");
 	}
-	else throw Carbon::ExecutorRuntimeException("nist test function needs 1 parameter");
+	else throw Carbon::ExecutorRuntimeException("nist test function needs at least 1 parameter");
 }
 
 
 
 static std::shared_ptr<Carbon::Node> nistTestUniversal(std::vector<std::shared_ptr<Carbon::Node>>& node) {
-	if (node.size() == 1) {
+	if (node.size() >= 1) {
 		if (node[0]->GetNodeType() == Carbon::NodeType::Bits) {
+			auto info = ParseBlockLengthAndVersion(node);
+			if (info.foundBlockLength)
+			{
+				throw Carbon::ExecutorRuntimeException("Universal test does not need block length");
+			}
 			auto& l = reinterpret_cast<Carbon::NodeBits&>(*node[0]);
 			auto& bits = l.Value;
 			auto nistBitSequence = Convert(bits);
 			Nist::Parameters testParameters = GetTestParameters(nistBitSequence);
 			Nist::Results testResults;
 			Nist::Test test(&nistBitSequence, &testParameters, &testResults);
+			// if provided version
+			if (info.foundVersion)
+			{
+				// auto
+				if (info.version == "v1")		Universal(test);
+				else if (info.version == "v2")	Universal2(test);
+				else throw Carbon::ExecutorRuntimeException("Universal test version not found, possible values are v1, v2");
+			}
+			else
+			{
+				// based on speed setting 
+				test.RunTestUniversal();
+			}
 			test.RunTestUniversal();
 			auto objResult = std::make_shared<Carbon::NodeObject>();
 			objResult->Map.insert_or_assign("p_value", std::make_shared<Carbon::NodeFloat>(testResults.universal.p_value));
@@ -320,33 +503,39 @@ static std::shared_ptr<Carbon::Node> nistTestUniversal(std::vector<std::shared_p
 		}
 		else throw Carbon::ExecutorRuntimeException("nist test function only works on binary sequence");
 	}
-	else throw Carbon::ExecutorRuntimeException("nist test function needs 1 parameter");
+	else throw Carbon::ExecutorRuntimeException("nist test function needs at least 1 parameter");
 }
 
 
 static std::shared_ptr<Carbon::Node> nistTestApproximateEntropy(std::vector<std::shared_ptr<Carbon::Node>>& node) {
-	if (node.size() == 1) {
+	if (node.size() >= 1) {
 		if (node[0]->GetNodeType() == Carbon::NodeType::Bits) {
+			auto info = ParseBlockLengthAndVersion(node);
 			auto& l = reinterpret_cast<Carbon::NodeBits&>(*node[0]);
 			auto& bits = l.Value;
 			auto nistBitSequence = Convert(bits);
 			Nist::Parameters testParameters = GetTestParameters(nistBitSequence);
 			// check for paramter
-			if (node.size() >= 2)
+			if (info.foundBlockLength)
 			{
-				if (node[1]->GetNodeType() == Carbon::NodeType::Integer)
-				{
-					auto& param = reinterpret_cast<Carbon::NodeInteger&>(*node[1]);
-					testParameters.approximateEntropyBlockLength = param.Value;
-				}
-				else
-				{
-					throw Carbon::ExecutorRuntimeException("second parameter for test function may only be an integer");
-				}
+				testParameters.approximateEntropyBlockLength = info.blockLength;
 			}
 			Nist::Results testResults;
 			Nist::Test test(&nistBitSequence, &testParameters, &testResults);
-			test.RunTestApproximateEntropy();
+			// if provided version
+			if (info.foundVersion)
+			{
+				// auto
+				if (info.version == "v1")		ApproximateEntropy(test);
+				else if (info.version == "v2")	ApproximateEntropy2(test);
+				else if (info.version == "v4")	ApproximateEntropy4(test);
+				else throw Carbon::ExecutorRuntimeException("Universal test version not found, possible values are v1, v2, v4");
+			}
+			else
+			{
+				// based on speed setting 
+				test.RunTestApproximateEntropy();
+			}
 			auto objResult = std::make_shared<Carbon::NodeObject>();
 			objResult->Map.insert_or_assign("p_value", std::make_shared<Carbon::NodeFloat>(testResults.approximate_entropy.p_value));
 			auto arrayP = std::make_shared<Carbon::NodeArray>();
@@ -366,20 +555,38 @@ static std::shared_ptr<Carbon::Node> nistTestApproximateEntropy(std::vector<std:
 		}
 		else throw Carbon::ExecutorRuntimeException("nist test function only works on binary sequence");
 	}
-	else throw Carbon::ExecutorRuntimeException("nist test function needs 1 parameter");
+	else throw Carbon::ExecutorRuntimeException("nist test function needs at least 1 parameter");
 }
 
 
 static std::shared_ptr<Carbon::Node> nistTestCusum(std::vector<std::shared_ptr<Carbon::Node>>& node) {
-	if (node.size() == 1) {
+	if (node.size() >= 1) {
 		if (node[0]->GetNodeType() == Carbon::NodeType::Bits) {
+			auto info = ParseBlockLengthAndVersion(node);
+			if (info.foundBlockLength)
+			{
+				throw Carbon::ExecutorRuntimeException("CumulativeSums test does not need block length");
+			}
 			auto& l = reinterpret_cast<Carbon::NodeBits&>(*node[0]);
 			auto& bits = l.Value;
 			auto nistBitSequence = Convert(bits);
 			Nist::Parameters testParameters = GetTestParameters(nistBitSequence);
 			Nist::Results testResults;
 			Nist::Test test(&nistBitSequence, &testParameters, &testResults);
-			test.RunTestCumulativeSums();
+			// if provided version
+			if (info.foundVersion)
+			{
+				// auto
+				if (info.version == "v1")		CumulativeSums(test);
+				else if (info.version == "v2")	CumulativeSums2(test);
+				else if (info.version == "v3")	CumulativeSums3(test);
+				else throw Carbon::ExecutorRuntimeException("CumulativeSums test version not found, possible values are v1, v2, v3");
+			}
+			else
+			{
+				// based on speed setting 
+				test.RunTestCumulativeSums();
+			}
 			auto objResult = std::make_shared<Carbon::NodeObject>();
 			objResult->Map.insert_or_assign("p_valueA", std::make_shared<Carbon::NodeFloat>(testResults.cusum.p_valueA));
 			objResult->Map.insert_or_assign("p_valueB", std::make_shared<Carbon::NodeFloat>(testResults.cusum.p_valueB));
@@ -393,20 +600,37 @@ static std::shared_ptr<Carbon::Node> nistTestCusum(std::vector<std::shared_ptr<C
 		}
 		else throw Carbon::ExecutorRuntimeException("nist test function only works on binary sequence");
 	}
-	else throw Carbon::ExecutorRuntimeException("nist test function needs 1 parameter");
+	else throw Carbon::ExecutorRuntimeException("nist test function needs at least 1 parameter");
 }
 
 
 static std::shared_ptr<Carbon::Node> nistTestRandomExcursion(std::vector<std::shared_ptr<Carbon::Node>>& node) {
-	if (node.size() == 1) {
+	if (node.size() >= 1) {
 		if (node[0]->GetNodeType() == Carbon::NodeType::Bits) {
+			auto info = ParseBlockLengthAndVersion(node);
+			if (info.foundBlockLength)
+			{
+				throw Carbon::ExecutorRuntimeException("RandomExcursions test does not need block length");
+			}
 			auto& l = reinterpret_cast<Carbon::NodeBits&>(*node[0]);
 			auto& bits = l.Value;
 			auto nistBitSequence = Convert(bits);
 			Nist::Parameters testParameters = GetTestParameters(nistBitSequence);
 			Nist::Results testResults;
 			Nist::Test test(&nistBitSequence, &testParameters, &testResults);
-			test.RunTestRandomExcursions();
+			// if provided version
+			if (info.foundVersion)
+			{
+				// auto
+				if (info.version == "v1")		RandomExcursions(test);
+				else if (info.version == "v2")	RandomExcursions2(test);
+				else throw Carbon::ExecutorRuntimeException("RandomExcursions test version not found, possible values are v1, v2");
+			}
+			else
+			{
+				// based on speed setting 
+				test.RunTestRandomExcursions();
+			}
 			auto objResult = std::make_shared<Carbon::NodeObject>();
 			objResult->Map.insert_or_assign("valid", std::make_shared<Carbon::NodeBit>(testResults.random_excursion.valid));
 			auto objArray = std::make_shared<Carbon::NodeArray>();
@@ -423,18 +647,36 @@ static std::shared_ptr<Carbon::Node> nistTestRandomExcursion(std::vector<std::sh
 		}
 		else throw Carbon::ExecutorRuntimeException("nist test function only works on binary sequence");
 	}
-	else throw Carbon::ExecutorRuntimeException("nist test function needs 1 parameter");
+	else throw Carbon::ExecutorRuntimeException("nist test function needs at least 1 parameter");
 }
 
 static std::shared_ptr<Carbon::Node> nistTestRandomExcursionVariant(std::vector<std::shared_ptr<Carbon::Node>>& node) {
-	if (node.size() == 1) {
+	if (node.size() >= 1) {
 		if (node[0]->GetNodeType() == Carbon::NodeType::Bits) {
+			auto info = ParseBlockLengthAndVersion(node);
+			if (info.foundBlockLength)
+			{
+				throw Carbon::ExecutorRuntimeException("RandomExcursionsVariant test does not need block length");
+			}
 			auto& l = reinterpret_cast<Carbon::NodeBits&>(*node[0]);
 			auto& bits = l.Value;
 			auto nistBitSequence = Convert(bits);
 			Nist::Parameters testParameters = GetTestParameters(nistBitSequence);
 			Nist::Results testResults;
 			Nist::Test test(&nistBitSequence, &testParameters, &testResults);
+			// if provided version
+			if (info.foundVersion)
+			{
+				// auto
+				if (info.version == "v1")		RandomExcursionsVariant(test);
+				else if (info.version == "v2")	RandomExcursionsVariant2(test);
+				else throw Carbon::ExecutorRuntimeException("RandomExcursionsVariant test version not found, possible values are v1, v2");
+			}
+			else
+			{
+				// based on speed setting 
+				test.RunTestRandomExcursionsVariant();
+			}
 			test.RunTestRandomExcursionsVariant();
 			auto objResult = std::make_shared<Carbon::NodeObject>();
 			objResult->Map.insert_or_assign("valid", std::make_shared<Carbon::NodeBit>(testResults.random_excursion_variant.valid));
@@ -451,7 +693,7 @@ static std::shared_ptr<Carbon::Node> nistTestRandomExcursionVariant(std::vector<
 		}
 		else throw Carbon::ExecutorRuntimeException("nist test function only works on binary sequence");
 	}
-	else throw Carbon::ExecutorRuntimeException("nist test function needs 1 parameter");
+	else throw Carbon::ExecutorRuntimeException("nist test function needs at least 1 parameter");
 }
 
 // set test suite settings
@@ -482,28 +724,34 @@ static std::shared_ptr<Carbon::Node> nistSettings( std::vector<std::shared_ptr<C
 
 
 static std::shared_ptr<Carbon::Node> nistTestLinearComplexity(std::vector<std::shared_ptr<Carbon::Node>>& node) {
-	if (node.size() == 1) {
+	if (node.size() >= 1) {
 		if (node[0]->GetNodeType() == Carbon::NodeType::Bits) {
+			auto info = ParseBlockLengthAndVersion(node);
 			auto& l = reinterpret_cast<Carbon::NodeBits&>(*node[0]);
 			auto& bits = l.Value;
 			auto nistBitSequence = Convert(bits);
 			Nist::Parameters testParameters = GetTestParameters(nistBitSequence);
 			// check for paramter
-			if (node.size() >= 2)
+			if (info.foundBlockLength)
 			{
-				if (node[1]->GetNodeType() == Carbon::NodeType::Integer)
-				{
-					auto& param = reinterpret_cast<Carbon::NodeInteger&>(*node[1]);
-					testParameters.linearComplexitySequenceLength = param.Value;
-				}
-				else
-				{
-					throw Carbon::ExecutorRuntimeException("second parameter for test function may only be an integer");
-				}
+				testParameters.linearComplexitySequenceLength = info.blockLength;
 			}
 			Nist::Results testResults;
 			Nist::Test test(&nistBitSequence, &testParameters, &testResults);
-			test.RunTestLinearComplexity();
+			// if provided version
+			if (info.foundVersion)
+			{
+				// auto
+				if (info.version == "v1")		LinearComplexity(test);
+				else if (info.version == "v2")	LinearComplexity2(test);
+				else if (info.version == "v3")	LinearComplexity3(test);
+				else throw Carbon::ExecutorRuntimeException("LinearComplexity test version not found, possible values are v1, v2, v3");
+			}
+			else
+			{
+				// based on speed setting 
+				test.RunTestLinearComplexity();
+			}
 			auto objResult = std::make_shared<Carbon::NodeObject>();
 			objResult->Map.insert_or_assign("p_value", std::make_shared<Carbon::NodeFloat>(testResults.linear_complexity.p_value));
 			objResult->Map.insert_or_assign("chi2", std::make_shared<Carbon::NodeFloat>(testResults.linear_complexity.chi2));
@@ -517,20 +765,37 @@ static std::shared_ptr<Carbon::Node> nistTestLinearComplexity(std::vector<std::s
 		}
 		else throw Carbon::ExecutorRuntimeException("nist test function only works on binary sequence");
 	}
-	else throw Carbon::ExecutorRuntimeException("nist test function needs 1 parameter");
+	else throw Carbon::ExecutorRuntimeException("nist test function needs at least 1 parameter");
 }
 
 
 static std::shared_ptr<Carbon::Node> nistTestDft(std::vector<std::shared_ptr<Carbon::Node>>& node) {
-	if (node.size() == 1) {
+	if (node.size() >= 1) {
 		if (node[0]->GetNodeType() == Carbon::NodeType::Bits) {
+			auto info = ParseBlockLengthAndVersion(node);
+			if (info.foundBlockLength)
+			{
+				throw Carbon::ExecutorRuntimeException("DiscreteFourierTransform test does not need block length");
+			}
 			auto& l = reinterpret_cast<Carbon::NodeBits&>(*node[0]);
 			auto& bits = l.Value;
 			auto nistBitSequence = Convert(bits);
 			Nist::Parameters testParameters = GetTestParameters(nistBitSequence);
 			Nist::Results testResults;
 			Nist::Test test(&nistBitSequence, &testParameters, &testResults);
-			test.RunTestDiscreteFourierTransform();
+			// if provided version
+			if (info.foundVersion)
+			{
+				// auto
+				if (info.version == "v1")		DiscreteFourierTransform(test);
+				else if (info.version == "v2")	DiscreteFourierTransform2(test);
+				else throw Carbon::ExecutorRuntimeException("DiscreteFourierTransform test version not found, possible values are v1, v2");
+			}
+			else
+			{
+				// based on speed setting 
+				test.RunTestDiscreteFourierTransform();
+			}
 			auto objResult = std::make_shared<Carbon::NodeObject>();
 			objResult->Map.insert_or_assign("p_value", std::make_shared<Carbon::NodeFloat>(testResults.dft.p_value));
 			objResult->Map.insert_or_assign("d", std::make_shared<Carbon::NodeFloat>(testResults.dft.d));
@@ -541,7 +806,7 @@ static std::shared_ptr<Carbon::Node> nistTestDft(std::vector<std::shared_ptr<Car
 		}
 		else throw Carbon::ExecutorRuntimeException("nist test function only works on binary sequence");
 	}
-	else throw Carbon::ExecutorRuntimeException("nist test function needs 1 parameter");
+	else throw Carbon::ExecutorRuntimeException("nist test function needs at least 1 parameter");
 }
 
 void RegisterNistTestFunctions(Carbon::Executor& executor)
